@@ -27,7 +27,8 @@ Before you can start capturing streams you first need to [follow](https://i.imgu
 To start capturing streams you need to run `node main.js` I reccomend you do this in [screen](https://www.gnu.org/software/screen/) as that'll keep running if you lose connection to the machine or otherwise close your shell.
 Standard output should look something this when recording streams:
 
-[04:48:02] Start searching for new models.
-[04:48:06] Found these live followed models: do_it_hard
-[04:48:06] Create recording process.
-[04:48:06] do_it_hard is online >>> start recording.
+  [04:48:02] Start searching for new models.
+  [04:48:06] Found these live followed models: do_it_hard
+  [04:48:06] Create recording process.
+  [04:48:06] do_it_hard is online >>> start recording.
+
