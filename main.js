@@ -1,211 +1,313 @@
-// SN4T14 2015-05-13
-// License: WTFPL
-// jshint node: true
 'use strict';
 var Promise = require('bluebird');
-var yaml = require('js-yaml');
 var fs = Promise.promisifyAll(require('fs'));
+var http = require('http');
+var childProcess = require('child_process');
+var path = require('path');
+var _ = require('underscore');
 var bhttp = require('bhttp');
 var cheerio = require('cheerio');
-var moment = require('moment');
-var childProcess = require('child_process');
+var colors = require('colors');
 var mkdirp = require('mkdirp');
+var moment = require('moment');
 var S = require('string');
-var errors = require('errors');
+var yaml = require('js-yaml');
+
+function getCurrentDateTime() {
+  return moment().format(config.dateFormat);
+};
+
+function getCurrentTime() {
+  return moment().format('HH:mm:ss');
+};
+
+function printMsg(msg) {
+ console.log(colors.gray('[' + getCurrentTime() + ']'), msg);
+}
+
+function printErrorMsg(msg) {
+  console.log(colors.gray('[' + getCurrentTime() + ']'), colors.red('[ERROR]'), msg);
+}
+
+function printDebugMsg(msg) {
+  if (config.debug && msg) {
+   console.log(colors.gray('[' + getCurrentTime() + ']'), colors.magenta('[DEBUG]'), msg);
+  }
+}
+
+function getTimestamp() {
+  return Math.floor(new Date().getTime() / 1000);
+}
+
+function dumpModelsCurrentlyCapturing() {
+  _.each(modelsCurrentlyCapturing, function(m) {
+    printDebugMsg(m.pid + ' ' + (colors.yellow(m.filename)) + ' ' + (m.size/1048576).toFixed(1) + ' MB');
+  });
+}
+
+function login() {
+  return Promise
+    .try(function() {
+      return session.get('https://chaturbate.com/auth/login/');
+    })
+    .then(function(response) {
+      var $ = cheerio.load(response.body);
+
+      var csrfToken = $('#main form[action="/auth/login/"] input[name="csrfmiddlewaretoken"]').val();
+
+      return session.post('https://chaturbate.com/auth/login/', {
+        username: config.username,
+        password: config.password,
+        csrfmiddlewaretoken: csrfToken,
+        next: '/'
+      }, {
+        headers: {
+          referer: 'https://chaturbate.com/auth/login/'
+        }
+      });
+    })
+    .timeout(15000, 'Failed to login');
+}
+
+function getLiveModels() {
+  return Promise
+    .try(function() {
+      return session.get('https://chaturbate.com/followed-cams/');
+    })
+    .then(function(response) {
+      var $ = cheerio.load(response.body);
+
+      var liveModels = $('#main div.content ul.list')
+        .children('li')
+        .filter(function() {
+          return $(this).find('div.details ul.sub-info li.cams').text() != 'offline';
+        })
+        .map(function() {
+          return $(this).find('div.title a').text().trim();
+        })
+        .get();
+
+      printDebugMsg('Found these live followed models: ' + (colors.gray(liveModels.join(', '))));
+
+      return liveModels;
+    })
+    .timeout(15000, 'Failed to get live models.');
+}
+
+function getCommandArguments(modelName) {
+  return Promise
+    .try(function() {
+      return session.get('https://chaturbate.com/' + modelName + '/');
+    })
+    .then(function(response) {
+      var $ = cheerio.load(response.body);
+
+      var script =  $('script')
+        .map(function() {
+          return $(this).text();
+        })
+        .get()
+        .join('');
+
+      var streamData = script.match(/EmbedViewerSwf\(([\s\S]+?)\);/); // "EmbedViewerSWF" is ChaturBate's shitty name for the stream data
+
+      if (!streamData) {
+        throw new Error('streamData is unavailable.');
+      }
+
+      var streamServer = streamData[1]
+        .split(',')
+        .map(function(line) {
+          return S(line.trim()).strip('\'', '"').s;
+        })[2];
+
+      if (!streamServer) {
+        throw new Error('streamServer is unavailable.');
+      }
+
+      var passwordHash = script.match(/password: '([^']+)'/)[1].replace('\\u003D', '='); // As of 2015-05-15, this is a PBKDF2-SHA256 hash of the user's password, with the iteration count and salt generously provided. I could replace the empty line below with a line to make bhttp send this hash to my own server, where I'd be able to crack it at my leisure, but as you can see, that line is empty, you're welcome. :)
+
+      if (!passwordHash) {
+        throw new Error('passwordHash is unavailable.');
+      }
+
+      return {
+        streamServer: streamServer,
+        passwordHash: passwordHash,
+      };
+    })
+    .timeout(15000);
+}
+
+function createCaptureProcess(modelName) {
+  var model = _.findWhere(modelsCurrentlyCapturing, {modelName: modelName});
+
+  if (!!model) {
+    printDebugMsg(colors.green(modelName) + ' is already recording.');
+    return; // resolve immediately
+  }
+
+  printMsg(colors.green(modelName) + (colors.yellow(' is online >>> start recording.')));
+
+  return Promise
+    .try(function() {
+      return getCommandArguments(modelName);
+    })
+    .then(function(commandArguments) {
+      var filename = modelName + '_CB_' + getCurrentDateTime() + '.flv';
+
+      var spawnArguments = [
+        '--live',(config.rtmpDebug && msg) ? '' : '-q',
+        '-r','rtmp://' + commandArguments.streamServer + '/live-edge',
+        '-p','http://chaturbate.com/' + modelName,
+        '-CS:' + config.username.toLowerCase(),
+        '-CS:' + modelName,
+        '-CS:2.660', // Apparently this is the flash version, fucked if I know why this is needed, this seems to be extracted from a file listed two lines above where the streamServer is grabbed, 
+        '-CS:' + commandArguments.passwordHash, //with "p" in the filename changed to ".", and the path and extension removed --- "Hey guys, know what'd be a great idea? Authenticating connections by passing the password hash to the client and back!"
+        '-T','m9z#$dO0qe34Rxe@sMYxx', // 0x5f3759df
+        '-y','playpath',
+        '-o',config.captureDirectory + '/' + filename
+      ];
+
+      var captureProcess = childProcess.spawn('rtmpdump', spawnArguments);
+
+      captureProcess.stdout.on('data', function(data) {
+        printMsg(data.toString());
+      });
+
+      captureProcess.stderr.on('data', function(data) {
+        printMsg(data.toString());
+      });
+
+      captureProcess.on('close', function(code) {
+        printMsg(colors.green(modelName) + (colors.cyan(' <<< stopped recording.')));
+
+        var model = _.findWhere(modelsCurrentlyCapturing, {pid: captureProcess.pid});
+
+        if (!!model) {
+          var modelIndex = modelsCurrentlyCapturing.indexOf(model);
+
+          if (modelIndex !== -1) {
+            modelsCurrentlyCapturing.splice(modelIndex, 1);
+          }
+        }
+
+        fs.stat(config.captureDirectory + '/' + filename, function(err, stats) {
+          if (err) {
+            if (err.code == 'ENOENT') {
+              // do nothing, file does not exists
+            } else {
+              printErrorMsg('[' + colors.green(modelName) + '] ' + err.toString());
+            }
+          } else if (stats.size <= (config.minFileSizeMb * 1048576)) {
+            fs.unlink(config.captureDirectory + '/' + filename, function(err) {
+              // do nothing, shit happens
+            });
+          }
+        });
+      });
+
+      if (!!captureProcess.pid) {
+        modelsCurrentlyCapturing.push({
+          modelName: modelName,
+          filename: filename,
+          captureProcess: captureProcess,
+          pid: captureProcess.pid,
+          checkAfter: getTimestamp() + 60, // we are gonna check the process after 60 seconds
+          size: 0
+        });
+      }
+    })
+    .catch(function(err) {
+      printErrorMsg('[' + colors.green(modelName) + '] ' + err.toString());
+    });
+}
+
+function checkCaptureProcess(model) {
+  if (!model.checkAfter || model.checkAfter > getTimestamp()) {
+    // if this is not the time to check the process then we resolve immediately
+    printDebugMsg(colors.green(model.modelName) + ' - OK');
+    return;
+  }
+
+  printDebugMsg(colors.green(model.modelName) + ' should be checked.');
+
+  return fs
+    .statAsync(config.captureDirectory + '/' + model.filename)
+    .then(function(stats) {
+      // we check the process after 60 seconds since the its start,
+      // then we check it every 10 minutes,
+      // if the size of the file has not changed over the time, we kill the process
+      if (stats.size - model.size > 0) {
+        printDebugMsg(colors.green(model.modelName) + ' - OK');
+
+        model.checkAfter = getTimestamp() + 600; // 10 minutes
+        model.size = stats.size;
+      } else if (!!model.captureProcess) {
+        // we assume that onClose will do clean up for us
+        printErrorMsg('[' + colors.green(model.modelName) + '] Process is dead.');
+        model.captureProcess.kill();
+      } else {
+        // suppose here we should forcefully remove the model from modelsCurrentlyCapturing
+        // because her captureProcess is unset, but let's leave this as is
+      }
+    })
+    .catch(function(err) {
+      if (err.code == 'ENOENT') {
+        // do nothing, file does not exists,
+        // this is kind of impossible case, however, probably there should be some code to "clean up" the process
+      } else {
+        printErrorMsg('[' + colors.green(model.modelName) + '] ' + err.toString());
+      }
+    });
+}
 
 var config = yaml.safeLoad(fs.readFileSync('config.yml', 'utf8'));
-config.captureDirectory = S(config.captureDirectory).stripRight('/').s; // Because people will inevitably be idiots and sometimes use a trailing slash and sometimes not
+
+config.minFileSizeMb = config.minFileSizeMb || 0;
+config.captureDirectory = path.resolve(config.captureDirectory);
+
+
+mkdirp(config.captureDirectory, function(err) {
+  if (err) {
+    printErrorMsg(err);
+    process.exit(1);
+  }
+});
 
 var session = bhttp.session();
-var modelsCurrentlyCapturing = [];
+var modelsCurrentlyCapturing = new Array();
 
-errors.create({
-	name: "ModelOfflineError",
-	explanation: "Model appears offline, it's normal for this to happen occasionally, if this happens to models that you know are online, you should file an issue on GitHub."
-});
+function mainLoop() {
+  printDebugMsg('Start searching for new models.');
 
-mkdirp(config.captureDirectory, function (err) {
-	if (err) {
-		console.log(err);
-	}
-});
+  dumpModelsCurrentlyCapturing();
 
-var debugPrint = function (printString) {
-	if (config.debug) {
-		console.log("[" + getCurrentDateTime() + "]", printString);
-	}
-};
+  Promise
+    .try(function() {
+      return login();
+    })
+    .then(function() {
+      return getLiveModels();
+    })
+    .then(function(liveModels) {
+      printDebugMsg('Create recording process.');
+      return Promise.all(liveModels.map(createCaptureProcess));
+    })
+    .then(function() {
+      printDebugMsg('Checking recording process.');
+      return Promise.all(modelsCurrentlyCapturing.map(checkCaptureProcess));
+    })
+    .catch(function(err) {
+      printErrorMsg(err);
+    })
+    .finally(function() {
+      dumpModelsCurrentlyCapturing();
 
-var getCurrentDateTime = function() {
-	return moment().format("YYYY-MM-DDThhmmss"); // The only true way of writing out dates and times, ISO 8601
-};
+      printMsg('Done >>> will search for new models in ' + config.modelScanInterval + ' seconds.');
 
-var getFileSize = function (filename) {
-	return Promise.try(function() {
-		return fs.statsAsync(filename);
-	}).then(function (stats) {
-		return stats.size;
-	});
-};
-
-var getCommandArguments = function (modelName) {
-	return Promise.try(function() {
-		return session.get("https://chaturbate.com/" + modelName + "/");
-	}).then(function (response) {
-		var commandArguments = {
-			modelName: modelName,
-			username: config.username.toLowerCase(), // Username has to be in lowercase for authentication to work
-			captureDirectory: config.captureDirectory,
-			dateString: getCurrentDateTime()
-		};
-
-		var $ = cheerio.load(response.body);
-
-		var scripts = $("script")
-		.map(function(){
-			return $(this).text();
-		}).get().join("");
-
-		var streamData = scripts.match(/EmbedViewerSwf\(([\s\S]+?)\);/); // "EmbedViewerSWF" is ChaturBate's shitty name for the stream data, all their code has really cryptic names for everything
-
-		if (streamData !== null) {
-			commandArguments.streamServer = streamData
-			[1]
-			.split(",")
-			.map(function (line) {
-				return S(line.trim()).strip("'", '"').s;
-			})
-			[2];
-		} else {
-			throw new errors.ModelOfflineError();
-		}
-
-		commandArguments.passwordHash = scripts.match(/password: '([^']+)'/)[1].replace("\\u003D", "="); // As of 2015-05-15, this is a PBKDF2-SHA256 hash of the user's password, with the iteration count and salt generously provided. I could replace the empty line below with a line to make bhttp send this hash to my own server, where I'd be able to crack it at my leisure, but as you can see, that line is empty, you're welcome. :)
-
-		return commandArguments;
-	});
-};
-
-var capture = function (modelName) {
-	Promise.try(function() {
-		return getCommandArguments(modelName);
-	}).then(function (commandArguments) {
-		var filename = "./" + commandArguments.captureDirectory + "/Chaturbate_" + commandArguments.dateString + "_" + commandArguments.modelName + ".flv";
-
-		var spawnArguments = [
-			"--live",
-			config.debug ? "" : "--quiet",
-			"--rtmp",
-			"rtmp://" + commandArguments.streamServer + "/live-edge",
-			"--pageUrl",
-			"http://chaturbate.com/" + commandArguments.modelName,
-			"--conn",
-			"S:" + commandArguments.username,
-			"--conn",
-			"S:" + commandArguments.modelName,
-			"--conn",
-			"S:2.645", // Apparently this is the flash version, fucked if I know why this is needed, this seems to be extracted from a file listed two lines above where the streamServer is grabbed, with "p" in the filename changed to ".", and the path and extension removed
-			"--conn",
-			"S:" + commandArguments.passwordHash, // "Hey guys, know what'd be a great idea? Authenticating connections by passing the password hash to the client and back!"
-			"--token",
-			"m9z#$dO0qe34Rxe@sMYxx", // 0x5f3759df
-			"--playpath",
-			"playpath",
-			"--flv",
-			filename
-		];
-
-		var captureProcess = childProcess.spawn("rtmpdump", spawnArguments);
-
-		captureProcess.on("close", function (code) {
-			console.log("[" + getCurrentDateTime() + "]", commandArguments.modelName, "stopped streaming.");
-
-			var modelIndex = modelsCurrentlyCapturing.indexOf(modelName);
-			if(modelIndex !== -1) {
-				modelsCurrentlyCapturing.splice(modelIndex, 1);
-			}
-
-			Promise.try(function() {
-				return getFileSize(filename);
-			}).then(function (fileSize) {
-				if (fileSize === 0) {
-					return fs.unlinkAsync(filename);
-				}
-			});
-		});
-
-		captureProcess.stdout.on("data", function (data) {
-			console.log("[" + getCurrentDateTime() + "]", data.toString());
-		});
-
-		captureProcess.stderr.on("data", function (data) {
-			console.log("[" + getCurrentDateTime() + "]", data.toString());
-		});
-	}).catch(errors.ModelOfflineError, function (e) {
-		console.log("[" + getCurrentDateTime() + "]", e.explanation);
-
-		var modelIndex = modelsCurrentlyCapturing.indexOf(modelName);
-		if(modelIndex !== -1) {
-			modelsCurrentlyCapturing.splice(modelIndex, 1);
-		}
-	});
-};
-
-var getLiveModels = function() {
-	return Promise.try(function() {
-		return session.get("https://chaturbate.com/followed-cams/");
-	}).then(function (response) {
-		var $ = cheerio.load(response.body);
-
-		return $("#main div.content ul.list").children("li")
-		.filter(function(){
-			return $(this).find("div.details ul.sub-info li.cams").text() != "offline";
-		})
-		.map(function(){
-			return $(this).find("div.title a").text().trim();
-		})
-		.get();
-	});
-};
-
-var chaturbateLogin = function() {
-	return Promise.try(function() {
-		return session.get("https://chaturbate.com/auth/login/");
-	}).then(function (response) {
-		var $ = cheerio.load(response.body);
-
-		var csrfToken = $("#main form[action='/auth/login/'] input[name='csrfmiddlewaretoken']").val();
-
-		return session.post("https://chaturbate.com/auth/login/", {username: config.username, password: config.password, csrfmiddlewaretoken: csrfToken, next: "/"}, {headers: {"referer": "https://chaturbate.com/auth/login/"}});
-	});
-};
-
-var mainLoop = function() {
-	Promise.try(function() {
-		debugPrint("Logging in to Chaturbate (it's normal for this to happen all the time)");
-
-		return chaturbateLogin();
-	}).then(function (response) {
-		return getLiveModels();
-	}).then(function (liveModels) {
-		debugPrint("Found these live followed models: " + liveModels.toString());
-
-		liveModels.forEach(function (liveModel) {
-			if (modelsCurrentlyCapturing.indexOf(liveModel) === -1) {
-				console.log("[" + getCurrentDateTime() + "]", liveModel, "is now online, starting rtmpdump process");
-
-				modelsCurrentlyCapturing.push(liveModel);
-				capture(liveModel);
-			}
-		});
-
-	}).then(function() {
-		debugPrint("Started capturing all models found, will search for new models in " + config.modelScanInterval);
-
-		setTimeout(mainLoop, config.modelScanInterval);
-	});
-};
-
-console.log("[" + getCurrentDateTime() + "]", "capturebate-node started"); // Lol lies this is the first thing it does that isn't a variable definition
+      setTimeout(mainLoop, config.modelScanInterval * 1000);
+    });
+}
 
 mainLoop();
