@@ -9,16 +9,12 @@ Requirements
 
 Setup
 =====
-Install requirements, run `npm install` in the same folder as main.js is.
-Get a [chaturbate account](https://chaturbate.com/accounts/register/), once you're signed up put your credentials in the `config.yml` file and - if needed - adjust the other options.
-
-Setup
-=====
-1. Install [Node.js](https://nodejs.org/download/release/) (tested with `7.9.0` and `8.1.3`).
-2. Download and unpack the [code](https://codeload.github.com/horacio9a/capturebate-node/zip/master).
-3. Open console and go into the directory where you unpacked the files.
-4. Install requirements by running `npm install` in the same directory as `main.js` is.
-5. Edit `config.yml` file and set desirable values for `username`, `password`, `captureDirectory`, `dateFormat` and `modelScanInterval`.
+1. Get a [chaturbate account](https://chaturbate.com/accounts/register/), once you're signed up put your credentials in the `config.yml` file and - if needed - adjust the other options.
+2. Install [Node.js](https://nodejs.org/download/release/) (tested with `7.9.0` and `8.1.3`).
+3. Download and unpack the [code](https://codeload.github.com/horacio9a/capturebate-node/zip/master).
+4. Open console and go into the directory where you unpacked the files.
+5. Install requirements by running `npm install` in the same directory as `main.js` is.
+6. Edit `config.yml` file and set desirable values for `username`, `password`, `captureDirectory`, `dateFormat` and `modelScanInterval`.
 
 Running & Output
 ================
