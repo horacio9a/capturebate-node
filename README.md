@@ -9,7 +9,7 @@ Requirements
 
 Setup
 =====
-1. Get a [chaturbate account](https://chaturbate.com/accounts/register/), once you're signed up put your credentials in the `config.yml` file and - if needed - adjust the other options.
+1. Get a [chaturbate account](https://chaturbate.com/accounts/register/).
 2. Install [Node.js](https://nodejs.org/download/release/) (tested with `7.9.0` and `8.1.3`).
 3. Download and unpack the [code](https://codeload.github.com/horacio9a/capturebate-node/zip/master).
 4. Open console and go into the directory where you unpacked the files.
