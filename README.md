@@ -17,9 +17,8 @@ Setup
 1. Install [Node.js](https://nodejs.org/download/release/) (tested with `7.9.0` and `8.1.3`).
 2. Download and unpack the [code](https://codeload.github.com/horacio9a/capturebate-node/zip/master).
 3. Open console and go into the directory where you unpacked the files.
-4. Install requirements by running `npm install` in the same directory as `mfc.js` is.
-5. Get a [chaturbate account](https://chaturbate.com/accounts/register/).
-6. Edit `config.yml` file and set desirable values for `username`, `password`, `captureDirectory`, `dateFormat` and `modelScanInterval`.
+4. Install requirements by running `npm install` in the same directory as `main.js` is.
+5. Edit `config.yml` file and set desirable values for `username`, `password`, `captureDirectory`, `dateFormat` and `modelScanInterval`.
 
 Running & Output
 ================
@@ -32,4 +31,3 @@ Standard output should look something this when recording streams:
 [04:48:06] Found these live followed models: do_it_hard
 [04:48:06] Create recording process.
 [04:48:06] do_it_hard is online >>> start recording.
-
